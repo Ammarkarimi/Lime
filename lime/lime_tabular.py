@@ -12,8 +12,35 @@ import scipy as sp
 import sklearn
 import sklearn.preprocessing
 from sklearn.utils import check_random_state
-from pyDOE2 import lhs
 from scipy.stats.distributions import norm
+
+# Robust Latin Hypercube Sampling import/fallback for Python 3.12+
+try:
+    from pyDOE2 import lhs as _lhs_pydoe2  # type: ignore
+
+    def lhs(n, samples):
+        return _lhs_pydoe2(n, samples=samples)
+except Exception:  # pragma: no cover - fallback path
+    try:
+        from scipy.stats import qmc as _qmc  # type: ignore
+
+        def lhs(n, samples):
+            sampler = _qmc.LatinHypercube(d=n)
+            return sampler.random(n=samples)
+    except Exception:
+        def lhs(n, samples):
+            # Minimal NumPy Latin Hypercube as last resort
+            rng = np.random.default_rng()
+            cut = np.linspace(0.0, 1.0, samples + 1)
+            u = rng.random((samples, n))
+            a = cut[:-1]
+            b = cut[1:]
+            rdpoints = u * (b - a)[:, None] + a[:, None]  # shape: (samples, n)
+            H = np.empty_like(rdpoints.T)
+            for j in range(n):
+                order = rng.permutation(samples)
+                H[j, :] = rdpoints[order, j]
+            return H.T
 
 from lime.discretize import QuartileDiscretizer
 from lime.discretize import DecileDiscretizer

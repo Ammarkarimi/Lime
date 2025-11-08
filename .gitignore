@@ -5,6 +5,8 @@
 /dist/
 
 /lime/node_modules
+/venv
+/build
 
 # Python egg metadata, regenerated from source files by setuptools.
 /*.egg-info
