@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LIME LLM Frontend</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background: #f5f7fb; }
+      .container { max-width: 1100px; margin: 28px auto; }
+      .app-header { display:flex; align-items:center; gap:16px; }
+      .app-title { margin:0; font-weight:700; letter-spacing:-0.2px; }
+      .app-sub { color: #6c757d; margin:0; }
+      .card-section { margin-bottom:16px; }
+      pre.logs { max-height: 320px; overflow:auto; background:#ffffff; padding:14px; border-radius:6px; border:1px solid #e9ecef; }
+      .small-muted { color:#6c757d; font-size:0.9rem; }
+      .feature-label { font-size:0.85rem; color:#495057; margin-bottom:6px; }
+      .controls-row .btn { min-width: 140px; }
+      .dataset-info { font-size:0.95rem; color:#495057; }
+      .target-legend { font-size:0.9rem; color:#495057; margin-top:8px; }
+    </style>
+  </head>
+  <body>
+    <div class="container py-4">
+      <div class="app-header mb-3">
+        <div>
+          <h1 class="app-title">LIME — LLM Enhanced Example</h1>
+          <p class="app-sub">Run the LLM-enhanced tabular example and view the generated explanation HTML.</p>
+        </div>
+      </div>
+
+      <div id="alert-placeholder"></div>
+
+      <div class="card card-section">
+        <div class="card-body">
+          <h5 class="card-title">Dataset</h5>
+          <div class="row g-3 align-items-end controls-row">
+            <div class="col-md-5">
+              <label class="form-label">Built-in dataset</label>
+              <select id="builtinSelect" class="form-select">
+                <option value="" selected>None</option>
+                {% if datasets %}
+                  {% for d in datasets %}
+                    <option value="{{ d.name }}">{{ d.display }}</option>
+                  {% endfor %}
+                {% endif %}
+              </select>
+            </div>
+            <div class="col-md-5">
+              <label class="form-label">or upload CSV</label>
+              <input id="fileInput" type="file" class="form-control" accept=".csv" />
+            </div>
+            <div class="col-md-2 text-end">
+              <button id="loadDatasetBtn" class="btn btn-secondary">Load Dataset</button>
+            </div>
+          </div>
+
+          <div id="datasetMeta" class="mt-3" style="display:none;">
+            <div class="dataset-info mb-2">Columns: <span id="columnsList"></span></div>
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label">Target column</label>
+                <select id="targetSelect" class="form-select"></select>
+                <div id="targetLegend" class="target-legend"></div>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">Algorithm</label>
+                <select id="algoSelect" class="form-select">
+                  <option>RandomForestClassifier</option>
+                  <option>LogisticRegression</option>
+                  <option>RandomForestRegressor</option>
+                  <option>LinearRegression</option>
+                </select>
+              </div>
+              <div class="col-md-4 d-flex align-items-center justify-content-end">
+                <div class="d-flex gap-2">
+                  <button id="trainBtn" class="btn btn-primary">Train & Explain</button>
+                  <a id="openResultBtn" class="btn btn-success" style="display:none;" target="_blank">Open Result</a>
+                  <a id="viewLastBtn" class="btn btn-outline-secondary" style="display:none;" target="_blank">View Last Result</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card card-section">
+        <div class="card-body">
+          <h5 class="card-title">Manual test this explanation</h5>
+          <p class="small-muted">Enter feature values and click <strong>Test</strong> to see the model prediction and whether the LLM expression holds.</p>
+          <div id="featureInputs" class="row g-3 mb-3">
+            <!-- Feature inputs will be populated here after dataset load -->
+          </div>
+          <div class="d-flex gap-2">
+            <button id="testBtn" class="btn btn-outline-primary">Test</button>
+            <div id="testResult" style="display:none; width:100%;">
+              <h6 class="mt-3">Test Result</h6>
+              <pre id="testJson" class="logs"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-md-7">
+          <div class="card card-section">
+            <div class="card-body">
+              <h5 class="card-title">Status</h5>
+              <div id="status" class="mb-2">Idle</div>
+              <div id="metrics" class="mb-2" style="display:none;"></div>
+              <div id="suggestedInstanceActions" style="display:none;" class="mb-2">
+                <button id="useSuggestedBtn" class="btn btn-sm btn-outline-secondary">Use Suggested Instance</button>
+                <button id="explainInstanceBtn" class="btn btn-sm btn-primary ms-2">Explain Suggested Instance</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-5">
+          <div class="card card-section">
+            <div class="card-body">
+              <h5 class="card-title">Logs</h5>
+              <pre id="logs" class="logs">(no logs yet)</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="small text-muted">After the run completes, the result page will embed the generated file <code>example_tabular_llm_explanation.html</code>.</p>
+    </div>
+
+    <script>
+      // run/demo buttons removed; use Train button to start jobs
+      const statusEl = document.getElementById('status');
+      const logsEl = document.getElementById('logs');
+      const openResultBtn = document.getElementById('openResultBtn');
+
+      function showAlert(message, type='danger'){
+        const html = `<div class="alert alert-${type}" role="alert">${message}</div>`;
+        document.getElementById('alert-placeholder').innerHTML = html;
+      }
+
+      // demo/run button logic removed (use Train & Explain flow)
+
+      // Dataset UI
+      async function loadBuiltinList(){
+        const r = await fetch('/api/builtin_datasets');
+        const j = await r.json();
+        const sel = document.getElementById('builtinSelect');
+        sel.innerHTML = '';
+        const noneOpt = document.createElement('option');
+        noneOpt.value = '';
+        noneOpt.textContent = 'None';
+        noneOpt.selected = true;
+        sel.appendChild(noneOpt);
+        j.datasets.forEach(d => { const opt = document.createElement('option'); opt.value = d.name; opt.textContent = d.display; sel.appendChild(opt); });
+      }
+
+      const loadDatasetBtn = document.getElementById('loadDatasetBtn');
+      const builtinSelect = document.getElementById('builtinSelect');
+      const trainBtnEl = document.getElementById('trainBtn');
+
+      // Disable Train until dataset is loaded
+      if (trainBtnEl) trainBtnEl.disabled = true;
+
+      async function loadSelectedDataset(name){
+        const r = await fetch('/api/select_dataset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name}) });
+        const j = await r.json();
+        if (j.error){ showAlert(j.error); return; }
+        // prefer columns_meta if provided
+        populateDatasetMeta(j.columns_meta || j.columns, null);
+        // If backend suggests an algorithm or target, use it
+        if (j.suggested_algorithm && document.getElementById('algoSelect')){
+          document.getElementById('algoSelect').value = j.suggested_algorithm;
+        }
+        if (j.suggested_target && document.getElementById('targetSelect')){
+          document.getElementById('targetSelect').value = j.suggested_target;
+        }
+      }
+
+      // Auto-load when builtin selection changes
+      if (builtinSelect){
+        builtinSelect.addEventListener('change', async () => {
+          const name = builtinSelect.value;
+          await loadSelectedDataset(name);
+        });
+      }
+
+      loadDatasetBtn.addEventListener('click', async () => {
+        const fileInput = document.getElementById('fileInput');
+        if (fileInput.files && fileInput.files.length){
+          const form = new FormData(); form.append('file', fileInput.files[0]);
+          const r = await fetch('/api/upload_dataset', { method: 'POST', body: form });
+          const j = await r.json();
+          if (j.error) { showAlert(j.error); return; }
+          populateDatasetMeta(j.columns_meta || j.columns, j.path);
+          window._current_csv_path = j.path;
+          if (trainBtnEl) trainBtnEl.disabled = false;
+        } else {
+          const name = builtinSelect.value;
+          const r = await fetch('/api/select_dataset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name}) });
+          const j = await r.json();
+          if (j.error){ showAlert(j.error); return; }
+          populateDatasetMeta(j.columns_meta || j.columns, null);
+          if (trainBtnEl) trainBtnEl.disabled = false;
+        }
+      });
+
+      function populateDatasetMeta(columns, csv_path){
+        document.getElementById('datasetMeta').style.display = 'block';
+        // If columns_meta provided, show names with types; otherwise fall back to simple list
+        const colsSpan = document.getElementById('columnsList');
+        colsSpan.textContent = '';
+        const targetSel = document.getElementById('targetSelect');
+        targetSel.innerHTML = '';
+        let cols_meta = null;
+        if (Array.isArray(columns) && columns.length && columns[0] && typeof columns[0] === 'object'){
+          // Already meta objects
+          cols_meta = columns;
+        } else if (window._last_columns_meta){
+          cols_meta = window._last_columns_meta;
+        }
+
+        if (cols_meta){
+          colsSpan.textContent = cols_meta.map(c=>`${c.name} (${c.type})`).join(', ');
+          // Always use actual column names for dropdown
+          cols_meta.forEach(c => {
+            const o = document.createElement('option');
+            o.value = c.name;
+            o.textContent = c.name;
+            targetSel.appendChild(o);
+          });
+        } else {
+          colsSpan.textContent = columns.join(', ');
+          columns.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; targetSel.appendChild(o); });
+        }
+        window._current_csv_path = csv_path || null;
+        // Enable train button now that we have columns
+        if (trainBtnEl) trainBtnEl.disabled = false;
+        // Create feature input fields for manual testing (exclude target)
+        const featureInputs = document.getElementById('featureInputs');
+        featureInputs.innerHTML = '';
+        const metaList = cols_meta || columns.map(n=>({name:n, type:'string'}));
+        window._last_columns_meta = metaList;
+        metaList.forEach((c) => {
+          const colDiv = document.createElement('div');
+          colDiv.className = 'col-sm-3 mb-2';
+          const label = document.createElement('div');
+          label.className = 'small text-muted mb-1';
+          label.textContent = `${c.name} (${c.type})`;
+          const inp = document.createElement('input');
+          inp.className = 'form-control';
+          // choose input type for numeric features
+          if (c.type === 'float' || c.type === 'integer'){
+            inp.type = 'number';
+            inp.step = c.type === 'integer' ? '1' : 'any';
+          } else {
+            inp.type = 'text';
+          }
+          inp.setAttribute('placeholder', c.name);
+          inp.setAttribute('data-feat', c.name);
+          inp.setAttribute('data-feat-type', c.type);
+          inp.value = '';
+          colDiv.appendChild(label);
+          colDiv.appendChild(inp);
+          featureInputs.appendChild(colDiv);
+        });
+        // Always default to first column as target for uploaded CSVs, user can change
+        if (metaList.length > 0) {
+          targetSel.value = metaList[0].name;
+          if (typeof chooseAlgorithmForTarget === 'function') chooseAlgorithmForTarget(metaList[0].name);
+          renderTargetLegend(metaList[0].name);
+        } else {
+          renderTargetLegend(null);
+        }
+      }
+
+      document.getElementById('trainBtn').addEventListener('click', async () => {
+        const target = document.getElementById('targetSelect').value;
+        const algorithm = document.getElementById('algoSelect').value;
+        const dataset = document.getElementById('builtinSelect').value;
+        const payload = { dataset, csv_path: window._current_csv_path, target, algorithm };
+        const r = await fetch('/api/train_and_explain', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        if (!r.ok){ showAlert('Failed to start training job'); return; }
+        const j = await r.json();
+        const jobId = j.job_id;
+        // disable Train to prevent duplicates and poll status
+        if (trainBtnEl) trainBtnEl.disabled = true;
+        pollStatus(jobId);
+      });
+
+      // Initialize
+      loadBuiltinList();
+
+      // Try to fetch latest result and enable View Last Result button
+      async function refreshLatestResult(){
+        try{
+          const r = await fetch('/api/latest_result');
+          if (!r.ok) return;
+          const j = await r.json();
+          const viewBtn = document.getElementById('viewLastBtn');
+          if (j && j.filename){
+            viewBtn.style.display = 'inline-block';
+            viewBtn.href = `/result?filename=${encodeURIComponent(j.filename)}`;
+          } else {
+            viewBtn.style.display = 'none';
+          }
+        }catch(e){ /* ignore */ }
+      }
+
+      refreshLatestResult();
+
+      // Test button handler
+      const testBtn = document.getElementById('testBtn');
+      testBtn.addEventListener('click', async () => {
+        // Collect feature inputs dynamically
+        const inputs = document.querySelectorAll('#featureInputs [data-feat]');
+        const payload = {};
+        inputs.forEach(inp => {
+          const name = inp.getAttribute('data-feat');
+          payload[name] = inp.value;
+        });
+        try{
+          const r = await fetch('/api/evaluate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+          const j = await r.json();
+          document.getElementById('testResult').style.display = 'block';
+          document.getElementById('testJson').textContent = JSON.stringify(j, null, 2);
+        }catch(e){
+          showAlert('Error testing expression: ' + e);
+        }
+      });
+
+      async function pollStatus(jobId){
+        statusEl.textContent = 'Running...';
+        const interval = setInterval(async () => {
+          try{
+            const r = await fetch(`/api/status/${jobId}`);
+            if (!r.ok){
+              showAlert('Failed to get status.');
+              clearInterval(interval);
+              runBtn.disabled = false;
+              return;
+            }
+            const j = await r.json();
+            statusEl.textContent = j.status;
+            logsEl.textContent = j.logs || '(no logs)';
+            if (j.status === 'done'){
+              clearInterval(interval);
+              if (trainBtnEl) trainBtnEl.disabled = false;
+              openResultBtn.style.display = 'inline-block';
+              openResultBtn.href = `/result?filename=${encodeURIComponent(j.filename)}`;
+              // Show metrics if present
+              const metricsDiv = document.getElementById('metrics');
+              if (j.metrics){
+                metricsDiv.style.display = 'block';
+                metricsDiv.textContent = 'Metrics: ' + JSON.stringify(j.metrics);
+              } else {
+                metricsDiv.style.display = 'none';
+              }
+              // If a suggested sample instance exists, prefill inputs and show actions
+              if (j.sample_instance){
+                const inputs = document.querySelectorAll('#featureInputs [data-feat]');
+                inputs.forEach(inp => { const name=inp.getAttribute('data-feat'); if (j.sample_instance[name] !== undefined) inp.value = j.sample_instance[name]; });
+                document.getElementById('suggestedInstanceActions').style.display = 'block';
+              } else {
+                document.getElementById('suggestedInstanceActions').style.display = 'none';
+              }
+              // Also update persistent View Last Result button
+              const viewBtn = document.getElementById('viewLastBtn');
+              if (viewBtn){ viewBtn.style.display = 'inline-block'; viewBtn.href = `/result?filename=${encodeURIComponent(j.filename)}` }
+              showAlert('Job completed successfully.', 'success');
+            } else if (j.status === 'error'){
+              clearInterval(interval);
+              if (trainBtnEl) trainBtnEl.disabled = false;
+              showAlert('Job failed. See logs for details.');
+            }
+          }catch(e){
+            clearInterval(interval);
+            if (trainBtnEl) trainBtnEl.disabled = false;
+            showAlert('Error while polling status.');
+          }
+        }, 1500);
+      }
+
+      // Use suggested instance: copy sample values into inputs
+      const useSuggestedBtn = document.getElementById('useSuggestedBtn');
+      if (useSuggestedBtn){
+        useSuggestedBtn.addEventListener('click', async () => {
+          // latest job sample instance is already set by pollStatus; just reveal inputs (they're prefilled)
+          showAlert('Suggested instance loaded into the input fields.', 'info');
+        });
+      }
+
+      const explainInstanceBtn = document.getElementById('explainInstanceBtn');
+      if (explainInstanceBtn){
+        explainInstanceBtn.addEventListener('click', async () => {
+          // Collect current feature inputs
+          const inputs = document.querySelectorAll('#featureInputs [data-feat]');
+          const payload = {};
+          inputs.forEach(inp => { payload[inp.getAttribute('data-feat')] = inp.value; });
+          // Call explain_instance endpoint
+          try{
+            const r = await fetch('/api/explain_instance', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+            const j = await r.json();
+            if (j.error){ showAlert('Explain failed: ' + j.error); return; }
+            // Open the generated explanation
+            window.open(`/result?filename=${encodeURIComponent(j.filename)}`, '_blank');
+          }catch(e){ showAlert('Explain request failed: ' + e); }
+        });
+      }
+    </script>
+  </body>
+</html>

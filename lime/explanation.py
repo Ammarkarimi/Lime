@@ -253,7 +253,56 @@ class Explanation(object):
 
         out = u'''<html>
         <meta http-equiv="content-type" content="text/html; charset=UTF8">
-        <head><script>%s </script></head><body>''' % bundle
+        <head>
+        <script>%s </script>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .summary { background: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px; border-left: 4px solid #0066cc; }
+            .summary h3 { margin-top: 0; color: #0066cc; }
+            .summary pre { background: white; padding: 10px; border-radius: 3px; overflow-x: auto; }
+            .summary-section { margin-bottom: 15px; }
+            .summary-section strong { color: #333; }
+        </style>
+        </head><body>''' % bundle
+        
+        # Build summary section
+        summary_html = u'<div class="summary"><h3>Explanation Summary</h3>'
+        
+        # Model prediction
+        if self.mode == "classification":
+            summary_html += u'<div class="summary-section"><strong>Model prediction:</strong><br/>'
+            if hasattr(self, 'predict_proba') and self.predict_proba is not None:
+                class_names = [str(x) for x in self.class_names]
+                proba = self.predict_proba.astype(float)
+                pred_idx = int(np.argmax(proba))
+                summary_html += u'  class = %s (index=%d)<br/>' % (class_names[pred_idx], pred_idx)
+                summary_html += u'  probability = %.4f' % proba[pred_idx]
+            summary_html += u'</div>'
+        else:
+            summary_html += u'<div class="summary-section"><strong>Model prediction:</strong><br/>'
+            if hasattr(self, 'predicted_value'):
+                summary_html += u'  value = %.4f' % self.predicted_value
+            summary_html += u'</div>'
+        
+        # Top contributing features
+        if labels is None and self.mode == "classification":
+            labels_to_show = self.available_labels()
+        elif labels is None:
+            labels_to_show = [self.dummy_label]
+        else:
+            labels_to_show = labels if isinstance(labels, (list, tuple)) else [labels]
+        
+        summary_html += u'<div class="summary-section"><strong>Top contributing features:</strong><br/>'
+        for label in labels_to_show[:1]:  # Show for first label only to keep it concise
+            as_list = self.as_list(label)
+            summary_html += u'<pre>'
+            for feature, weight in as_list[:10]:
+                summary_html += u'  %s: %+.4f\n' % (feature, weight)
+            summary_html += u'</pre>'
+        summary_html += u'</div></div>'
+        
+        out += summary_html
+        
         random_id = id_generator(size=15, random_state=check_random_state(self.random_state))
         out += u'''
         <div class="lime top_div" id="top_div%s"></div>
